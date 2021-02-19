@@ -1,0 +1,168 @@
+<html>
+
+<head>
+
+<script>
+var ratelimiter = {
+  lastReq: 0,
+  backoff: 0,
+  // Returns a promise that resolves when it's OK to send the next request.
+  wait: function() {
+    const now = Date.now();
+    const nextReqAllowed = this.lastReq + 1000 * (2 ** this.backoff);
+    const waitDur = nextReqAllowed - now;
+    if (waitDur < 0) {
+      console.debug('Allowing immediate request');
+      this.lastReq = now;
+      return Promise.resolve();
+    }
+    console.debug('Delaying request for (ms)', waitDur);
+    this.lastReq = nextReqAllowed;
+    return new Promise(resolve => setTimeout(resolve, waitDur));
+  },
+  // Should be called upon pushback for rate limit.
+  incBackoff: function() {
+    this.backoff++;
+  },
+  // Should be called upon a successful request.
+  reset: function() {
+    this.backoff = 0;
+  }
+}
+
+function getLS(id) {
+  // It's not clearly documented, but XIVAPI seems to handle pagination for us.
+  return fetch('https://xivapi.com/linkshell/' + id)
+    .then(response => response.json())
+    .then(data => {
+      if (!data.Linkshell) throw 'Failed to fetch LS';
+      console.log('Got LS', data.Linkshell);
+      return data.Linkshell;
+    })
+    .then(async linkshell => {
+      const charaIDs = linkshell.Results.map(r => '' + r.ID);
+      const charas = {};
+      for (charaID of charaIDs) {
+        charas[charaID] = await getCharacter(charaID);
+      }
+      return {
+        LSID: id,
+        FetchTime: Date.now(),
+        Charas: charas,
+      };
+    })
+    .then(x => {console.log(`getLS(${id})=`, x); return x;});
+}
+
+// Waist intentionally omitted since it will be removed in 6.0
+const GEAR_SLOTS = ['MainHand','Head','Body','Hands','Legs','Feet','OffHand','Earrings','Necklace','Bracelets','Ring1','Ring2','SoulCrystal'];
+
+function getCharacter(id) {
+  return getCharacterRetry(id, 0)
+    .then(response => response.json())
+    .then(data => {
+      console.log('Got character data', data);
+      const c = data.Character;
+      return {
+        // A struct containing a subset of data that
+        //   * is at least somewhat likely to change if the player is active,
+        //   * if changes, almost certainly means the player is active.
+        Name: c.Name,
+        Title: c.Title,
+        Levels: c.ClassJobs.map(x => x.Level).filter(x => x > 0).sort((a, b) => b - a).join(','),
+        CurrentClass: c.ActiveClassJob.ClassID,
+        Gear: GEAR_SLOTS.map(x => c.GearSet.Gear[x]).filter(x => x != undefined).map(x => x.ID).join(','),
+        Mounts: data.Mounts.length,
+        Minions: data.Minions.length,
+      };
+    });
+}
+
+async function getCharacterRetry(id, failures) {
+  await ratelimiter.wait();
+  const response = await fetch('https://xivapi.com/character/' + id + '?data=MIMO')
+  if (response.ok) {
+    ratelimiter.reset();
+    return response;
+  }
+  if (response.status == 429) { // Too Many Requests
+    ratelimiter.incBackoff();
+    failures++;
+    if (failures > 3) throw 'Exceeded max failures for code 429';
+    return getCharacterRetry(id, failures);
+  }
+  throw 'Cannot handle Response.status=' + response.status;
+}
+
+function dateTimeStr(ms) {
+  const d = new Date(ms);
+  const pad = n => ('0' + n).substr(-2);
+  const yyyymmdd = `${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}`
+  const hhmmss = `${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`
+  return `${yyyymmdd}T${hhmmss}`;
+}
+
+function createDownloadLink(ls) {
+  const filename = `LS_${ls.LSID}_${dateTimeStr(ls.FetchTime)}.json.txt`;
+
+  const a = document.createElement('a');
+  a.href = 'data:text/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(ls, null, 1));
+  a.download = filename;
+  a.text = filename;
+  document.getElementById('fileout').appendChild(a);
+}
+
+async function fetchClicked() {
+  setStatus('');
+  const lsid = document.getElementById('lsid');
+  if (!lsid.value) {
+    setError('Linkshell ID required');
+    return;
+  }
+  const fetch = document.getElementById('fetch');
+
+  fetch.disabled = true;
+  setStatus('Fetching...');
+
+  getLS(lsid.value).then(ls => createDownloadLink(ls))
+    .then(() => setStatus('Done'))
+    .catch(e => setError(e))
+    .finally(() => fetch.disabled = false);
+}
+
+function setError(msg) {
+  document.getElementById('status').textContent = msg;
+  document.getElementById('status').classList.add('error');
+}
+function setStatus(msg) {
+  document.getElementById('status').textContent = msg;
+  document.getElementById('status').classList.remove('error');
+}
+
+</script>
+
+<style>
+#status.error { color: red; }
+#fileout .title:only-child { display: none; }
+#fileout a { display: list-item; margin-left: 2em; }
+</style>
+
+</head>
+
+<body>
+
+<label for="lsid" title="Linkshell ID from Lodestone">Linkshell ID</label>
+<input id="lsid" type="text" placeholder="123">
+<input id="fetch" type="button" value="Fetch" onclick="fetchClicked()">
+
+<span id="status"></span>
+
+<br><br>
+
+<div id="fileout">
+<div class="title">Files for download</div>
+</div>
+
+</body>
+
+</html>

@@ -1,0 +1,194 @@
+<html>
+
+<head>
+
+<script>
+window.addEventListener("dragover", event => {
+  event.preventDefault();
+});
+
+window.addEventListener("drop", event => {
+  event.preventDefault();
+  for (const item of event.dataTransfer.items) {
+    readFile(item.getAsFile());
+  }
+});
+
+function filePickerOnInput(e) {
+  const picker = document.getElementById('filepicker');
+  for (const item of picker.files) {
+    readFile(item);
+  }
+  picker.value = "";
+}
+
+function readFile(file) {
+  const name = file.name;
+  const fileReader = new FileReader();
+  fileReader.onload = () => {
+    console.log("Read", name);
+    const content = fileReader.result;
+    const ls = JSON.parse(content);
+    console.log(ls);
+    addLS(ls);
+  };
+  fileReader.readAsText(file);
+}
+
+function dateTimeStr(ms) {
+  const d = new Date(ms);
+  const pad = n => ('0' + n).substr(-2);
+  const yyyymmdd = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`
+  const hhmmss = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+  return `${yyyymmdd} ${hhmmss}`;
+}
+
+// Global map of "LSID@FetchTime" -> LS struct
+var lsMap = {};
+
+function addLS(ls) {
+  const key = ls.LSID + '@' + ls.FetchTime;
+  if (key in lsMap) {
+    console.warn('Ignoring LS with duplicate key', key);
+    return;
+  }
+  lsMap[key] = ls;
+
+  const desc = `${ls.LSID} @ ${dateTimeStr(ls.FetchTime)}`;
+
+  const checkbox = document.createElement('input');
+  checkbox.type = 'checkbox';
+  checkbox.id = key;
+  checkbox.addEventListener('change', () => tryCompareLS());
+  const label = document.createElement('label');
+  label.appendChild(checkbox);
+  label.appendChild(document.createTextNode(desc));
+  document.getElementById('files').appendChild(label);
+}
+
+function tryCompareLS() {
+  const checkboxes = document.querySelectorAll('#files input[type=checkbox]')
+  const selectedKeys = Array.from(checkboxes).filter(box => box.checked).map(box => box.id);
+  if (selectedKeys.length != 2) {
+    document.getElementById('out').innerHTML = '';
+    return;
+  }
+
+  const lss = selectedKeys.map(x => lsMap[x]).sort((a, b) => a.FetchTime - b.FetchTime);
+  compareLS(lss[0], lss[1]);
+}
+
+class Diff {
+  constructor(name, type, diff) {
+    this.name = name;
+    this.type = type; // one of 'added', 'removed', 'same', 'modified'
+    this.diff = diff; // only applicable when type == 'modified'
+  }
+}
+
+function compareLS(a, b) {
+  if (a.LSID != b.LSID) {
+    console.warn('Comparing LSs of different IDs; results may be garbage');
+  }
+  const results = [] // Diff[]
+  for (const bc in b.Charas) {
+    if (bc in a.Charas) {
+      const diff = compareChara(a.Charas[bc], b.Charas[bc])
+      if (diff) {
+        results.push(new Diff(b.Charas[bc].Name, 'modified', diff));
+      } else {
+        results.push(new Diff(b.Charas[bc].Name, 'same'));
+      }
+    } else {
+      results.push(new Diff(b.Charas[bc].Name, 'added'));
+    }
+  }
+  for (const ac in a.Charas) {
+    if (ac in b.Charas) continue;
+    results.push(new Diff(a.Charas[ac].Name, 'removed'));
+  }
+
+  const typeOrder = {'same':1, 'modified':2, 'added':3, 'removed':4};
+  results.sort((x, y) => typeOrder[x.type] - typeOrder[y.type]);
+
+  console.log(results);
+  outputTable(results);
+}
+
+// Empty string means unchanged, any non-empty string describes a change.
+function compareChara(a, b) {
+  const changes = [];
+  if (a.Name != b.Name) {
+    changes.push(`renamed from ${a.Name}`);
+  }
+  if (a.Title != b.Title) {
+    changes.push('title');
+  }
+  if (a.Levels != b.Levels) {
+    changes.push('levels');
+  }
+  if (a.CurrentClass != b.CurrentClass) {
+    changes.push('class');
+  }
+  if (a.Gear != b.Gear) {
+    changes.push('gear');
+  }
+  if (a.Mounts != b.Mounts) {
+    changes.push('mounts');
+  }
+  if (a.Minions != b.Minions) {
+    changes.push('minions');
+  }
+  return changes.join(', ');
+}
+
+function outputTable(diffs) {
+  const table = document.getElementById('out');
+  table.innerHTML = '';
+  const thr = table.insertRow();
+  thr.insertCell().textContent = 'name';
+  thr.insertCell().textContent = 'type';
+  thr.insertCell().textContent = 'diff';
+  for (const diff of diffs) {
+    const tr = table.insertRow();
+    tr.insertCell().textContent = diff.name;
+    tr.insertCell().textContent = diff.type;
+    tr.insertCell().textContent = diff.diff;
+    tr.classList.add(diff.type);
+  }
+}
+
+</script>
+
+<style>
+#files .title:only-child { display: none; }
+#files label { display: block; }
+table#out { border-collapse: collapse; }
+table#out td { border: solid 1px grey; }
+table#out tr:first-child { font-weight: bold; }
+table#out tr.same { background-color: lightgrey; }
+table#out tr.modified { background-color: lightyellow; }
+table#out tr.added { background-color: lightgreen; }
+table#out tr.removed { background-color: pink; }
+</style>
+
+</head>
+
+<body>
+
+<input id="filepicker" type="file" accept=".json.txt" multiple="true" oninput="filePickerOnInput()">
+
+<br><br>
+
+<div id="files">
+<div class="title">Select 2 to compare</div>
+</div>
+
+<br><br>
+
+<table id="out">
+</table>
+
+</body>
+
+</html>
