@@ -32,6 +32,7 @@ var ratelimiter = {
 
 function getLS(id) {
   // It's not clearly documented, but XIVAPI seems to handle pagination for us.
+  setStatus('Fetching LS ...');
   return fetch('https://xivapi.com/linkshell/' + id)
     .then(response => response.json())
     .then(data => {
@@ -42,7 +43,8 @@ function getLS(id) {
     .then(async linkshell => {
       const charaIDs = linkshell.Results.map(r => '' + r.ID);
       const charas = {};
-      for (charaID of charaIDs) {
+      for (const [i, charaID] of charaIDs.entries()) {
+        setStatus(`Fetching character ${i+1}/${charaIDs.length} ...`);
         charas[charaID] = await getCharacter(charaID);
       }
       return {
